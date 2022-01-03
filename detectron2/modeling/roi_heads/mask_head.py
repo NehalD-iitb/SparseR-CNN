@@ -2,7 +2,7 @@
 from typing import List
 import fvcore.nn.weight_init as weight_init
 import torch
-from torch import nn
+from torch import nn, Tensor
 from torch.nn import functional as F
 
 from detectron2.config import configurable
@@ -54,7 +54,7 @@ def mask_rcnn_loss(pred_mask_logits: torch.Tensor, instances: List[Instances], v
 
     gt_classes = []
     gt_masks = []
-    for instances_per_image in instances:
+    for ind, instances_per_image in enumerate(instances):
         if len(instances_per_image) == 0:
             continue
         if not cls_agnostic_mask:
@@ -62,7 +62,7 @@ def mask_rcnn_loss(pred_mask_logits: torch.Tensor, instances: List[Instances], v
             gt_classes.append(gt_classes_per_image)
 
         gt_masks_per_image = instances_per_image.gt_masks.crop_and_resize(
-            instances_per_image.proposal_boxes.tensor, mask_side_len
+            instances_per_image.gt_boxes.tensor, mask_side_len
         ).to(device=pred_mask_logits.device)
         # A tensor of shape (N, M, M), N=#instances in the image; M=mask_side_len
         gt_masks.append(gt_masks_per_image)
@@ -77,7 +77,7 @@ def mask_rcnn_loss(pred_mask_logits: torch.Tensor, instances: List[Instances], v
     else:
         indices = torch.arange(total_num_masks)
         gt_classes = cat(gt_classes, dim=0)
-        pred_mask_logits = pred_mask_logits[indices, gt_classes]
+        pred_mask_logits = pred_mask_logits[indices, gt_classes] 
 
     if gt_masks.dtype == torch.bool:
         gt_masks_bool = gt_masks
@@ -189,10 +189,12 @@ class BaseMaskRCNNHead(nn.Module):
         x = self.layers(x)
         if self.training:
             assert not torch.jit.is_scripting()
-            return {"loss_mask": mask_rcnn_loss(x, instances, self.vis_period)}
+            # return {"loss_mask": mask_rcnn_loss(x, instances, self.vis_period)} # comment for mask branch sparsecnn
+            return x
         else:
-            mask_rcnn_inference(x, instances)
-            return instances
+            # mask_rcnn_inference(x, instances)
+            # return instances
+            return x
 
     def layers(self, x):
         """
@@ -248,12 +250,22 @@ class MaskRCNNConvUpsampleHead(BaseMaskRCNNHead, nn.Sequential):
         self.deconv = ConvTranspose2d(
             cur_channels, conv_dims[-1], kernel_size=2, stride=2, padding=0
         )
+        # self.deconv2 = ConvTranspose2d(
+        #     conv_dims[-1], conv_dims[-1], kernel_size=1, stride=1, padding=0
+        # )
+        # self.deconv3 = ConvTranspose2d(
+        #     conv_dims[-1], conv_dims[-1], kernel_size=1, stride=1, padding=0
+        # )
+        # self.deconv4 = ConvTranspose2d(
+        #     conv_dims[-1], conv_dims[-1], kernel_size=1, stride=1, padding=0
+        # )
         self.add_module("deconv_relu", nn.ReLU())
         cur_channels = conv_dims[-1]
 
+        # self.predictor = Conv2d(cur_channels, num_classes, kernel_size=1, stride=1, padding=0)
         self.predictor = Conv2d(cur_channels, num_classes, kernel_size=1, stride=1, padding=0)
 
-        for layer in self.conv_norm_relus + [self.deconv]:
+        for layer in self.conv_norm_relus + [self.deconv] :
             weight_init.c2_msra_fill(layer)
         # use normal distribution initialization for mask prediction layer
         nn.init.normal_(self.predictor.weight, std=0.001)

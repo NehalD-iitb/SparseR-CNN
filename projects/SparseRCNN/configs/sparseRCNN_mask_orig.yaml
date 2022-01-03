@@ -1,0 +1,36 @@
+_BASE_: "Base-SparseRCNN_orig.yaml"
+MODEL:
+  MASK_ON: True
+  WEIGHTS: /root/data/sparsercnn/training_dir/miniCOCO/SparseRCNN_box_2/model_0099999.pth
+  # WEIGHTS: "detectron2://ImageNetPretrained/torchvision/R-50.pkl"
+  BACKBONE:
+    FREEZE_AT: 5  
+  RESNETS:
+    DEPTH: 50
+    STRIDE_IN_1X1: False
+  SparseRCNN:
+    NUM_PROPOSALS: 20
+    NUM_CLASSES: 3
+    MASK_WEIGHT: 10.0
+    NUM_HEADS: 4
+  ROI_MASK_HEAD:
+    POOLER_TYPE: "ROIAlignV2"
+    NAME: "MaskRCNNConvUpsampleHead"
+    NUM_CONV: 4
+    POOLER_RESOLUTION: 14
+    POOLER_SAMPLING_RATIO: 2
+  ROI_BOX_HEAD:
+    POOLER_RESOLUTION: 7
+  ROI_HEADS:
+    NUM_CLASSES: 1
+DATASETS:
+  TRAIN: ("minicoco_train",)
+  TEST:  ("minicoco_val",)
+SOLVER:
+  IMS_PER_BATCH: 4
+  STEPS: (210000, 250000)
+  MAX_ITER: 270000
+INPUT:
+  CROP:
+    ENABLED: True
+  FORMAT: "RGB"

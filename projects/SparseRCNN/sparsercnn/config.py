@@ -33,6 +33,7 @@ def add_sparsercnn_config(cfg):
     cfg.MODEL.SparseRCNN.CLASS_WEIGHT = 2.0
     cfg.MODEL.SparseRCNN.GIOU_WEIGHT = 2.0
     cfg.MODEL.SparseRCNN.L1_WEIGHT = 5.0
+    cfg.MODEL.SparseRCNN.MASK_WEIGHT = 5.0
     cfg.MODEL.SparseRCNN.DEEP_SUPERVISION = True
     cfg.MODEL.SparseRCNN.NO_OBJECT_WEIGHT = 0.1
 

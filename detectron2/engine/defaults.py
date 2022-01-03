@@ -17,6 +17,7 @@ from collections import OrderedDict
 import torch
 from fvcore.nn.precise_bn import get_bn_modules
 from torch.nn.parallel import DistributedDataParallel
+from torch.utils import data
 
 import detectron2.data.transforms as T
 from detectron2.checkpoint import DetectionCheckpointer
@@ -481,6 +482,7 @@ class DefaultTrainer(TrainerBase):
         It now calls :func:`detectron2.data.build_detection_test_loader`.
         Overwrite it if you'd like a different data loader.
         """
+        print("here")
         return build_detection_test_loader(cfg, dataset_name)
 
     @classmethod

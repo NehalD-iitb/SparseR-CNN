@@ -102,16 +102,16 @@ class SparseRCNNDatasetMapper:
         # Therefore it's important to use torch.Tensor.
         dataset_dict["image"] = torch.as_tensor(np.ascontiguousarray(image.transpose(2, 0, 1)))
 
-        if not self.is_train:
-            # USER: Modify this if you want to keep them for some reason.
-            dataset_dict.pop("annotations", None)
-            return dataset_dict
+        # if not self.is_train:
+        #     # USER: Modify this if you want to keep them for some reason.
+        #     dataset_dict.pop("annotations", None)
+        #     return dataset_dict
 
         if "annotations" in dataset_dict:
             # USER: Modify this if you want to keep them for some reason.
-            for anno in dataset_dict["annotations"]:
-                anno.pop("segmentation", None)
-                anno.pop("keypoints", None)
+            # for anno in dataset_dict["annotations"]:
+            #     anno.pop("segmentation", None)
+            #     anno.pop("keypoints", None)
 
             # USER: Implement additional transformations if you have other types of data
             annos = [
@@ -119,6 +119,6 @@ class SparseRCNNDatasetMapper:
                 for obj in dataset_dict.pop("annotations")
                 if obj.get("iscrowd", 0) == 0
             ]
-            instances = utils.annotations_to_instances(annos, image_shape)
+            instances = utils.annotations_to_instances(annos, image_shape, mask_format="polygon")
             dataset_dict["instances"] = utils.filter_empty_instances(instances)
         return dataset_dict

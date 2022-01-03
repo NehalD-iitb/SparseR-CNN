@@ -1,0 +1,8 @@
+python demo/demo.py --config-file projects/SparseRCNN/configs/sparseRCNN_mask.yaml \
+ --input /root/data/DuralAVF/train2017/1.jpeg \
+ --output 20.jpeg \
+ --opts MODEL.WEIGHTS /root/data/sparsercnn/training_dir/SparseRCNN_mask_debug9/model_0009999.pth
+
+python projects/SparseRCNN/train_net.py --config-file /root/code/detectron2/sparsercnn/projects/SparseRCNN/configs/sparseRCNN_mask.yaml --num-gpus 1 --eval-only MODEL.WEIGHTS /root/data/sparsercnn/training_dir/SparseRCNN_mask_debug31/model_0044999.pth 
+
+python projects/SparseRCNN/train_net.py --config-file /root/code/detectron2/sparsercnn/configs/mask_rcnn_R_50_FPN_3x.yaml --num-gpus 1 --eval-only MODEL.WEIGHTS /root/data/pretrained_models/detectron2/model_final_f10217.pkl

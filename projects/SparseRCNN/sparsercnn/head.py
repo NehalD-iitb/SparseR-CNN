@@ -21,6 +21,8 @@ import torch.nn.functional as F
 
 from detectron2.modeling.poolers import ROIPooler, cat
 from detectron2.structures import Boxes
+from detectron2.modeling.roi_heads.mask_head import build_mask_head
+from detectron2.layers import ShapeSpec
 
 
 _DEFAULT_SCALE_CLAMP = math.log(100000.0 / 16)
@@ -89,30 +91,38 @@ class DynamicHead(nn.Module):
         )
         return box_pooler
 
-    def forward(self, features, init_bboxes, init_features):
-
+    def forward(self, features, init_bboxes, init_features, init_mask_features):
+        '''
+            features : List of FPN features
+            init_boxes: Initial bboxes: [B X num_proposals X 4]
+            init_features: [1, B X num_proposals, F]
+        '''
         inter_class_logits = []
         inter_pred_bboxes = []
-
+        inter_pred_masks = [] # adding masks option
+ 
         bs = len(features[0])
         bboxes = init_bboxes
         
         init_features = init_features[None].repeat(1, bs, 1)
+        init_mask_features = init_mask_features[None].repeat(1, bs, 1)
         proposal_features = init_features.clone()
-        
+        proposal_mask_features = init_mask_features.clone()
+
         for rcnn_head in self.head_series:
-            class_logits, pred_bboxes, proposal_features = rcnn_head(features, bboxes, proposal_features, self.box_pooler)
+            class_logits, pred_bboxes, mask_pred, proposal_features, proposal_mask_features = rcnn_head(features, bboxes, proposal_features, proposal_mask_features, self.box_pooler) 
 
             if self.return_intermediate:
                 inter_class_logits.append(class_logits)
                 inter_pred_bboxes.append(pred_bboxes)
+                inter_pred_masks.append(mask_pred)
             bboxes = pred_bboxes.detach()
 
         if self.return_intermediate:
-            return torch.stack(inter_class_logits), torch.stack(inter_pred_bboxes)
+            return torch.stack(inter_class_logits), torch.stack(inter_pred_bboxes), torch.stack(inter_pred_masks) # for masks
 
-        return class_logits[None], pred_bboxes[None]
-
+        return class_logits[None], pred_bboxes[None], mask_pred[None]# for masks
+ 
 
 class RCNNHead(nn.Module):
 
@@ -121,11 +131,11 @@ class RCNNHead(nn.Module):
         super().__init__()
 
         self.d_model = d_model
-
+        # mask 
+        self.mask_on = cfg.MODEL.MASK_ON
         # dynamic.
         self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
         self.inst_interact = DynamicConv(cfg)
-
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
@@ -167,8 +177,14 @@ class RCNNHead(nn.Module):
         self.scale_clamp = scale_clamp
         self.bbox_weights = bbox_weights
 
+        self.mask_head = build_mask_head(cfg = cfg, input_shape = ShapeSpec(channels=256,
+                            width=cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION,
+                            height=cfg.MODEL.ROI_MASK_HEAD.POOLER_RESOLUTION) )
 
-    def forward(self, features, bboxes, pro_features, pooler):
+        self.maskavg = nn.AvgPool2d(7)
+
+
+    def forward(self, features, bboxes, pro_features, mask_pro_features, pooler):
         """
         :param bboxes: (N, nr_boxes, 4)
         :param pro_features: (N, nr_boxes, d_model)
@@ -180,25 +196,47 @@ class RCNNHead(nn.Module):
         proposal_boxes = list()
         for b in range(N):
             proposal_boxes.append(Boxes(bboxes[b]))
-        roi_features = pooler(features, proposal_boxes)            
-        roi_features = roi_features.view(N * nr_boxes, self.d_model, -1).permute(2, 0, 1)        
+        roi_features = pooler(features, proposal_boxes)  # [num_proposals*B, featmaps, 7 ,7]
+
+
+        # actual_roi_feats = roi_features       # used for mask
+        roi_features = roi_features.view(N * nr_boxes, self.d_model, -1).permute(2, 0, 1)   # [B*num_proposals, featmap, 7, 7]
 
         # self_att.
-        pro_features = pro_features.view(N, nr_boxes, self.d_model).permute(1, 0, 2)
-        pro_features2 = self.self_attn(pro_features, pro_features, value=pro_features)[0]
-        pro_features = pro_features + self.dropout1(pro_features2)
-        pro_features = self.norm1(pro_features)
+        pro_features = pro_features.view(N, nr_boxes, self.d_model).permute(1, 0, 2)  # [num_proposals, B, featmaps]
+        pro_features2 = self.self_attn(pro_features, pro_features, value=pro_features)[0] #[num_proposals, B, featmaps]
+        pro_features = pro_features + self.dropout1(pro_features2) # [num_proposals, B, featmaps]
+        pro_features = self.norm1(pro_features) # [num_proposals, B, featmaps]
+
+        # self_att mask.
+        mask_pro_features = mask_pro_features.view(N, nr_boxes, self.d_model).permute(1, 0, 2) #
+        mask_pro_features2 = self.self_attn(mask_pro_features, mask_pro_features, value=mask_pro_features)[0]
+        mask_pro_features = mask_pro_features + self.dropout1(mask_pro_features2)
+        mask_pro_features = self.norm1(mask_pro_features) # [num_proposals, B, featmaps]
 
         # inst_interact.
-        pro_features = pro_features.view(nr_boxes, N, self.d_model).permute(1, 0, 2).reshape(1, N * nr_boxes, self.d_model)
-        pro_features2 = self.inst_interact(pro_features, roi_features)
+        pro_features = pro_features.view(nr_boxes, N, self.d_model).permute(1, 0, 2).reshape(1, N * nr_boxes, self.d_model) # [1, B*num_proposals, featmaps]
+        pro_features2 = self.inst_interact(pro_features, roi_features) # [num_proposals*B, featmaps]
         pro_features = pro_features + self.dropout2(pro_features2)
-        obj_features = self.norm2(pro_features)
+        obj_features = self.norm2(pro_features) # [1, num_proposals*B, featmaps]
+
+        # inst_interact mask
+        mask_pro_features = mask_pro_features.view(nr_boxes, N, self.d_model).permute(1, 0, 2).reshape(1, N * nr_boxes, self.d_model) # 
+        mask_pro_features2 = self.inst_interact(mask_pro_features, roi_features, mask_on = True) # [num_proposals*B, 7*7, featmaps]
+        mask_pro_features = mask_pro_features2.view(N*nr_boxes, self.d_model, 7, 7) # [num_proposals*B, featmaps, 7, 7]
+
+        # mask_head
+        mask_pred = self.mask_head(mask_pro_features, instances = None) # [num_proposals*B, cls, 14, 14]
+        mask_pred = mask_pred.sigmoid()
+        # mask_pro_features = mask_pro_features.view(N*nr_boxes, self.d_model, 49)
+        mask_pro_features = self.maskavg(mask_pro_features)
+        mask_pro_features = mask_pro_features.squeeze()
+        mask_pro_features = mask_pro_features.unsqueeze(0)
 
         # obj_feature.
         obj_features2 = self.linear2(self.dropout(self.activation(self.linear1(obj_features))))
         obj_features = obj_features + self.dropout3(obj_features2)
-        obj_features = self.norm3(obj_features)
+        obj_features = self.norm3(obj_features) # [1, num_proposals*B, featmaps]
         
         fc_feature = obj_features.transpose(0, 1).reshape(N * nr_boxes, -1)
         cls_feature = fc_feature.clone()
@@ -211,7 +249,7 @@ class RCNNHead(nn.Module):
         bboxes_deltas = self.bboxes_delta(reg_feature)
         pred_bboxes = self.apply_deltas(bboxes_deltas, bboxes.view(-1, 4))
         
-        return class_logits.view(N, nr_boxes, -1), pred_bboxes.view(N, nr_boxes, -1), obj_features
+        return class_logits.view(N, nr_boxes, -1), pred_bboxes.view(N, nr_boxes, -1), mask_pred.view(N, nr_boxes,1, 14, 14), obj_features, mask_pro_features
     
 
     def apply_deltas(self, deltas, boxes):
@@ -260,11 +298,13 @@ class DynamicConv(nn.Module):
     def __init__(self, cfg):
         super().__init__()
 
-        self.hidden_dim = cfg.MODEL.SparseRCNN.HIDDEN_DIM
-        self.dim_dynamic = cfg.MODEL.SparseRCNN.DIM_DYNAMIC
-        self.num_dynamic = cfg.MODEL.SparseRCNN.NUM_DYNAMIC
-        self.num_params = self.hidden_dim * self.dim_dynamic
+        self.hidden_dim = cfg.MODEL.SparseRCNN.HIDDEN_DIM #featmaps
+        self.dim_dynamic = cfg.MODEL.SparseRCNN.DIM_DYNAMIC # 64
+        self.num_dynamic = cfg.MODEL.SparseRCNN.NUM_DYNAMIC # 2
+        self.num_params = self.hidden_dim * self.dim_dynamic # 64 * featmaps
         self.dynamic_layer = nn.Linear(self.hidden_dim, self.num_dynamic * self.num_params)
+        # mask
+        self.mask_on = cfg.MODEL.MASK_ON
 
         self.norm1 = nn.LayerNorm(self.dim_dynamic)
         self.norm2 = nn.LayerNorm(self.hidden_dim)
@@ -276,24 +316,29 @@ class DynamicConv(nn.Module):
         self.out_layer = nn.Linear(num_output, self.hidden_dim)
         self.norm3 = nn.LayerNorm(self.hidden_dim)
 
-    def forward(self, pro_features, roi_features):
+    def forward(self, pro_features, roi_features, mask_on = False):
         '''
         pro_features: (1,  N * nr_boxes, self.d_model)
         roi_features: (49, N * nr_boxes, self.d_model)
         '''
-        features = roi_features.permute(1, 0, 2)
-        parameters = self.dynamic_layer(pro_features).permute(1, 0, 2)
+        features = roi_features.permute(1, 0, 2) # [num_proposals*B, 7*7, featmaps]
+        # pro_features : [1, num_proposals*B, featmaps]
+        parameters = self.dynamic_layer(pro_features).permute(1, 0, 2) # [num_proposals*B, 1, num_parameters ] Every proposal has parameters
 
-        param1 = parameters[:, :, :self.num_params].view(-1, self.hidden_dim, self.dim_dynamic)
-        param2 = parameters[:, :, self.num_params:].view(-1, self.dim_dynamic, self.hidden_dim)
+        param1 = parameters[:, :, :self.num_params].view(-1, self.hidden_dim, self.dim_dynamic) # [num_proposals*B, featmaps, 64]
+        param2 = parameters[:, :, self.num_params:].view(-1, self.dim_dynamic, self.hidden_dim) #  [num_proposals*B, 64, featmaps]
 
-        features = torch.bmm(features, param1)
-        features = self.norm1(features)
+        features = torch.bmm(features, param1) # [num_proposals, 49, featmaps] # weighted sum of all roi feature maps using dynamic paramaters predicted as weights
+        features = self.norm1(features) # layer norm, normalize over each proposal independently
         features = self.activation(features)
 
         features = torch.bmm(features, param2)
         features = self.norm2(features)
         features = self.activation(features)
+
+        if mask_on:
+            return features
+        # roi_features = features # for mask
 
         features = features.flatten(1)
         features = self.out_layer(features)
@@ -316,3 +361,5 @@ def _get_activation_fn(activation):
     if activation == "glu":
         return F.glu
     raise RuntimeError(F"activation should be relu/gelu, not {activation}.")
+
+

@@ -63,6 +63,7 @@ def detector_postprocess(
     if results.has("pred_masks"):
         results.pred_masks = retry_if_cuda_oom(paste_masks_in_image)(
             results.pred_masks[:, 0, :, :],  # N, 1, M, M
+            # results.pred_masks,
             results.pred_boxes,
             results.image_size,
             threshold=mask_threshold,

@@ -19,7 +19,6 @@ from .util.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 from scipy.optimize import linear_sum_assignment
 
-
 class SetCriterion(nn.Module):
     """ This class computes the loss for SparseRCNN.
     The process happens in two steps:
@@ -58,7 +57,7 @@ class SetCriterion(nn.Module):
         assert 'pred_logits' in outputs
         src_logits = outputs['pred_logits']
 
-        idx = self._get_src_permutation_idx(indices)
+        idx = self._get_src_permutation_idx(indices) # Tuple(batch indices, selected pred/proposal/query indices)
         target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
@@ -113,6 +112,53 @@ class SetCriterion(nn.Module):
 
         return losses
 
+    def dice_loss(self, input, target):
+        input = input.contiguous().view(input.size()[0], -1)
+        target = target.contiguous().view(target.size()[0], -1).float()
+
+        a = torch.sum(input * target, 1)
+        b = torch.sum(input * input, 1) + 0.001
+        c = torch.sum(target * target, 1) + 0.001
+        d = (2 * a) / (b + c)
+        return 1 - d
+
+    def loss_masks(self, outputs, targets, indices, num_boxes): # for masks
+        """ Adding a naive loss for mask in sparsecnn
+        """
+        idx = self._get_src_permutation_idx(indices)
+        src_masks = outputs['pred_masks'][idx] # numchosenindices X numclasses X 28 X 28
+        mask_side_len = src_masks.size(3) # 
+        gt_masks = []
+        for t in targets:
+
+            target_masks_resized = t['masks'].crop_and_resize(
+                t['boxes_xyxy'], mask_side_len
+            )
+            gt_masks.append(target_masks_resized)
+
+        gt_masks = torch.cat([t[i] for t, (_, i) in zip(gt_masks, indices)], dim=0) # num X 28 X 28
+
+        src_logits = outputs['pred_logits'] 
+
+        # target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        # # target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+        # #                             dtype=torch.int64, device=src_logits.device)
+
+        # indexes = torch.arange(src_masks.size(0))
+        # src_masks = src_masks[indexes, target_classes_o] 
+                
+        src_masks = src_masks[:,0,:,:] # masks shape 
+
+        gt_masks = gt_masks.to(dtype=torch.float32)
+        # mask_loss = nn.BCEWithLogitsLoss()(src_masks, gt_masks) #= self.dice_loss(src_masks, gt_masks) = 
+        mask_loss = self.dice_loss(src_masks, gt_masks)
+        losses = {}
+        # print("LOSS MASK", mask_loss)
+        losses['loss_mask'] = mask_loss.sum() / num_boxes
+
+        return losses
+
+
 
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
@@ -130,6 +176,7 @@ class SetCriterion(nn.Module):
         loss_map = {
             'labels': self.loss_labels,
             'boxes': self.loss_boxes,
+            'masks' :  self.loss_masks # for mask 
         }
         assert loss in loss_map, f'do you really want to compute {loss} loss?'
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
@@ -163,9 +210,9 @@ class SetCriterion(nn.Module):
             for i, aux_outputs in enumerate(outputs['aux_outputs']):
                 indices = self.matcher(aux_outputs, targets)
                 for loss in self.losses:
-                    if loss == 'masks':
-                        # Intermediate masks losses are too costly to compute, we ignore them.
-                        continue
+                    # if loss == 'masks':
+                    #     # Intermediate masks losses are too costly to compute, we ignore them.
+                    #     continue
                     kwargs = {}
                     if loss == 'labels':
                         # Logging is enabled only for the last layer
@@ -267,8 +314,9 @@ class HungarianMatcher(nn.Module):
 
         # Final cost matrix
         C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
-        C = C.view(bs, num_queries, -1).cpu()
-
+        C = C.view(bs, num_queries, -1).cpu() # B X num_proposals X num_targets
+ 
         sizes = [len(v["boxes"]) for v in targets]
-        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
+        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))] # this is very neat trick to get cost of 1st batch associated
+        # with 1st batch gt and 2nd batch preds with 2nd batch gt
         return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]

@@ -1,0 +1,88 @@
+_BASE_: "Base-SparseRCNN.yaml"
+MODEL:
+  MASK_ON: False
+  WEIGHTS: "/root/data/R-50.pkl"
+  # WEIGHTS: "/root/data/sparsercnn/training_dir/SparseRCNN_mask_debug36/model_0019999.pth"
+  # WEIGHTS: "/root/data/sparsercnn/training_dir/SparseRCNN_mask_debug40/model_0034999.pth"
+  RESNETS:
+    DEPTH: 50
+    STRIDE_IN_1X1: False
+  SparseRCNN:
+    NUM_PROPOSALS: 100
+    NUM_CLASSES: 3
+    MASK_WEIGHT: 20.0
+    NUM_HEADS: 4
+  ROI_MASK_HEAD:
+    POOLER_TYPE: "ROIAlignV2"
+    NAME: "MaskRCNNConvUpsampleHead"
+    NUM_CONV: 4
+    POOLER_RESOLUTION: 14
+    POOLER_SAMPLING_RATIO: 2
+  ROI_BOX_HEAD:
+    POOLER_RESOLUTION: 7
+  ROI_HEADS:
+    NUM_CLASSES: 1
+# DATASETS:
+#   TRAIN: ("coco_2017_train",)
+#   TEST:  ("coco_2017_val",)
+# DATASETS:
+#   TRAIN: ("dvfsurgery_train",)
+#   TEST:  ("dvfsurgery_val",)
+
+SOLVER:
+  STEPS: (5000, 7000)
+  MAX_ITER: 50000
+  IMS_PER_BATCH: 4
+  BASE_LR: 2.5e-05
+TEST:
+  EVAL_PERIOD: 200
+# INPUT:
+#   CROP:
+#     ENABLED: True
+#   FORMAT: "RGB"
+#   MASK_FORMAT: "bitmask"
+
+
+
+# ### THIS COMMENTED VERSION IS FOR TRIANING DIR
+# # root/data/sparsercnn/training_dir/SparseRCNN_mask_debug9/model_0009999.
+# _BASE_: "Base-SparseRCNN.yaml"
+# MODEL:
+#   MASK_ON: True
+#   WEIGHTS: "/root/data/R-50.pkl"
+#   RESNETS:
+#     DEPTH: 50
+#     STRIDE_IN_1X1: False
+#   SparseRCNN:
+#     NUM_PROPOSALS: 50
+#     NUM_CLASSES: 6
+#     MASK_WEIGHT: 10.0
+#     NUM_HEADS: 1
+#   ROI_MASK_HEAD:
+#     NAME: "MaskRCNNConvUpsampleHead"
+#     NUM_CONV: 2
+#     # POOLER_RESOLUTION: 7
+#     CLS_AGNOSTIC_MASK: True
+#   ROI_BOX_HEAD:
+#     POOLER_RESOLUTION: 7
+#   ROI_HEADS:
+#     NUM_CLASSES: 6
+# DATASETS:
+#   TRAIN: ("dvfsurgery_train",)
+#   TEST:  ("dvfsurgery_val",)
+# SOLVER:
+#   STEPS: (5000, 7000)
+#   MAX_ITER: 50000
+#   IMS_PER_BATCH: 1
+#   BASE_LR: 0.001
+# TEST:
+#   EVAL_PERIOD: 200
+# INPUT:
+#   CROP:
+#     ENABLED: False
+#   FORMAT: "RGB"
+#   MASK_FORMAT: "bitmask"
+
+
+
+

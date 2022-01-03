@@ -11,6 +11,8 @@ from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
 from detectron2.utils.logger import setup_logger
 from predictor import VisualizationDemo
+from detectron2.data import MetadataCatalog, DatasetCatalog
+from detectron2.data.datasets import register_coco_instances
 
 # constants
 WINDOW_NAME = "COCO detections"
@@ -77,12 +79,28 @@ if __name__ == "__main__":
 
     cfg = setup_cfg(args)
 
+    register_coco_instances("dvfsurgery_train", {}, "/root/data/DuralAVF/annotations/instances_train2017.json", "/root/data/DuralAVF/train2017")
+
+    MetadataCatalog.get("dvfsurgery_train").thing_classes = ['nonsegmented','artery', 'blood','spinalcord','bluntprobe','scissor']
+
+    DatasetCatalog.get("dvfsurgery_train")    
+
+
+    register_coco_instances("dvfsurgery_val", {}, "/root/data/DuralAVF/annotations/instances_train2017.json", "/root/data/DuralAVF/train2017")
+
+    MetadataCatalog.get("dvfsurgery_val").thing_classes = ['nonsegmented','artery', 'blood','spinalcord','bluntprobe','scissor']
+
+    DatasetCatalog.get("dvfsurgery_val")  
+
     demo = VisualizationDemo(cfg)
 
     if args.input:
         if len(args.input) == 1:
             args.input = glob.glob(os.path.expanduser(args.input[0]))
             assert args.input, "The input path(s) was not found"
+            img = read_image(args.input[0], format="RGB")
+            predictions, visualized_output = demo.run_on_image(img, args.confidence_threshold)
+ 
         for path in tqdm.tqdm(args.input, disable=not args.output):
             # use PIL, to be consistent with evaluation
 #             img = read_image(path, format="BGR")
